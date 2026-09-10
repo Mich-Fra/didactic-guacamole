@@ -5,7 +5,6 @@ import holidays
 import openpyxl
 import calendar
 import math
-import os
 
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -14,8 +13,7 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "database.db")
+DB_PATH = "database.db"
 
 
 # ============================================================
@@ -65,14 +63,8 @@ EPOCA_ROTazione = datetime.date(2000, 1, 3)
 # ============================================================
 
 def get_db():
-
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-
-    conn.execute(
-        "PRAGMA foreign_keys = ON"
-    )
-
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -136,6 +128,14 @@ def init_db():
 
     # ========================================================
     # LIMITI RUOLI
+    #
+    # attivo:
+    #   1 = limite attivo
+    #   0 = limite disattivato
+    #
+    # max_per_giorno contiene il valore numerico del limite.
+    # Quando il limite è disattivato, il valore viene mantenuto
+    # a 0 e NON viene utilizzato dal motore.
     # ========================================================
 
     cursor.execute("""
@@ -151,9 +151,7 @@ def init_db():
     # MIGRAZIONE DIPENDENTI
     # --------------------------------------------------------
 
-    cursor.execute(
-        "PRAGMA table_info(dipendenti)"
-    )
+    cursor.execute("PRAGMA table_info(dipendenti)")
 
     colonne = [
         row[1]
@@ -183,6 +181,10 @@ def init_db():
 
     # --------------------------------------------------------
     # MIGRAZIONE LIMITI RUOLI
+    #
+    # Il database potrebbe essere stato creato con la vecchia
+    # struttura che non aveva la colonna "attivo".
+    # In quel caso la aggiungiamo senza perdere i dati.
     # --------------------------------------------------------
 
     cursor.execute("""
@@ -201,12 +203,16 @@ def init_db():
             ADD COLUMN attivo INTEGER NOT NULL DEFAULT 1
         """)
 
+        # Vecchi record con limite 0:
+        # considerati disattivati.
         cursor.execute("""
             UPDATE limiti_ruoli
             SET attivo = 0
             WHERE max_per_giorno <= 0
         """)
 
+        # Vecchi record con limite > 0:
+        # rimangono attivi.
         cursor.execute("""
             UPDATE limiti_ruoli
             SET attivo = 1
@@ -302,50 +308,6 @@ def init_db():
             )
         """)
 
-    # --------------------------------------------------------
-    # SALTA FESTIVITÀ DEFAULT
-    # --------------------------------------------------------
-
-    cursor.execute("""
-        SELECT COUNT(*)
-        FROM impostazioni
-        WHERE chiave = 'salta_festivita'
-    """)
-
-    if cursor.fetchone()[0] == 0:
-
-        cursor.execute("""
-            INSERT INTO impostazioni (
-                chiave,
-                valore
-            )
-            VALUES (
-                'salta_festivita',
-                '1'
-            )
-        """)
-
-    cursor.execute("""
-        INSERT INTO impostazioni (chiave, valore)
-        VALUES ('protezione_venerdi_lunedi', '1')
-        ON CONFLICT(chiave) DO NOTHING
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_eccezioni_dipendente_date
-        ON eccezioni_dipendenti (id_dipendente, data_inizio, data_fine)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_periodi_date
-        ON tetto_periodi (data_inizio, data_fine)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_dipendenti_rotazione
-        ON dipendenti (rotazione_posizione, id)
-    """)
-
     conn.commit()
     conn.close()
 
@@ -368,16 +330,12 @@ def parse_date(value):
         "%Y-%m-%d",
         "%d/%m/%Y"
     ):
-
         try:
-
             return datetime.datetime.strptime(
                 value,
                 fmt
             ).date()
-
         except ValueError:
-
             continue
 
     return None
@@ -386,10 +344,7 @@ def parse_date(value):
 def format_date_it(value):
 
     if isinstance(value, datetime.date):
-
-        return value.strftime(
-            "%d/%m/%Y"
-        )
+        return value.strftime("%d/%m/%Y")
 
     return ""
 
@@ -426,25 +381,30 @@ def split_nome_cognome(nome_completo):
 def normalizza_frequenza(value):
 
     try:
-        valore = float(str(value).replace(",", "."))
-    except (TypeError, ValueError):
-        return 1
+        value = int(
+            round(
+                float(value)
+            )
+        )
+    except (
+        TypeError,
+        ValueError
+    ):
+        value = 1
 
-    if not valore.is_integer():
-        return 1
-
-    return max(1, int(valore))
+    return max(
+        1,
+        value
+    )
 
 
 # ============================================================
 # CALCOLO SETTIMANA / CICLO
 # ============================================================
-# ============================================================
 
 def calcola_settimana_assoluta(
     lunedi
 ):
-
     return (
         lunedi - EPOCA_ROTazione
     ).days // 7
@@ -532,16 +492,13 @@ def persone_giorno_da_settimane(
     """
 
     try:
-
         settimane = int(
             settimane
         )
-
     except (
         TypeError,
         ValueError
     ):
-
         settimane = 1
 
     settimane = max(
@@ -575,16 +532,13 @@ def settimane_da_persone_giorno(
     """
 
     try:
-
         persone_giorno = int(
             persone_giorno
         )
-
     except (
         TypeError,
         ValueError
     ):
-
         persone_giorno = 1
 
     persone_giorno = max(
@@ -819,7 +773,7 @@ def carica_dati():
         )
 
         # ----------------------------------------------------
-        # FREQUENZA
+        # FREQUENZA ROTAZIONE
         # ----------------------------------------------------
 
         frequenza = normalizza_frequenza(
@@ -842,27 +796,6 @@ def carica_dati():
 
         protezione_venerdi_lunedi = (
             valore_protezione
-            in (
-                "1",
-                "true",
-                "yes",
-                "on"
-            )
-        )
-
-        # ----------------------------------------------------
-        # SALTA FESTIVITÀ
-        # ----------------------------------------------------
-
-        valore_salta_festivita = str(
-            impostazioni.get(
-                "salta_festivita",
-                "1"
-            )
-        ).strip().lower()
-
-        salta_festivita = (
-            valore_salta_festivita
             in (
                 "1",
                 "true",
@@ -1004,19 +937,6 @@ def carica_dati():
                 )
 
         # ----------------------------------------------------
-        # Normalizza intervalli di eccezione sovrapposti o consecutivi.
-        for id_dipendente in list(eccezioni.keys()):
-            intervalli = sorted(eccezioni[id_dipendente], key=lambda x: (x[0], x[1]))
-            unificati = []
-            for di, df in intervalli:
-                if not unificati:
-                    unificati.append([di, df])
-                elif di <= unificati[-1][1] + datetime.timedelta(days=1):
-                    unificati[-1][1] = max(unificati[-1][1], df)
-                else:
-                    unificati.append([di, df])
-            eccezioni[id_dipendente] = [(di, df) for di, df in unificati]
-
         # PERIODI PERSONALIZZATI
         # ----------------------------------------------------
 
@@ -1082,6 +1002,16 @@ def carica_dati():
 
         # ----------------------------------------------------
         # LIMITI RUOLI
+        #
+        # IMPORTANTE:
+        #
+        # Un limite è applicato SOLO se:
+        #
+        #     attivo = 1
+        #     max_per_giorno >= 1
+        #
+        # Se attivo = 0 il ruolo non viene inserito
+        # nel dizionario e quindi non ha alcun limite.
         # ----------------------------------------------------
 
         cursor.execute("""
@@ -1156,10 +1086,7 @@ def carica_dati():
         "limiti_ruoli": limiti_ruoli,
 
         "protezione_venerdi_lunedi":
-            protezione_venerdi_lunedi,
-
-        "salta_festivita":
-            salta_festivita
+            protezione_venerdi_lunedi
     }
 
 
@@ -1172,6 +1099,18 @@ def tetto_per_data(
     tetto_base,
     periodi
 ):
+    """
+    Tetto effettivo della giornata.
+
+    Se non c'è un periodo:
+        tetto_base
+
+    Se c'è un periodo:
+        tetto del periodo
+
+    Se esistono più periodi sovrapposti:
+        prevale quello iniziato più recentemente.
+    """
 
     validi = [
         periodo
@@ -1242,104 +1181,9 @@ def in_eccezione(
             <= data
             <= df
         ):
-
             return True
 
     return False
-
-
-# ============================================================
-# FESTIVITÀ - MAPPA DELLA ROTAZIONE
-# ============================================================
-
-def e_festivita_saltabile(
-    data,
-    dati,
-    festivita_nazionali
-):
-
-    if data.weekday() >= 5:
-        return False
-
-    if not dati.get(
-        "salta_festivita",
-        True
-    ):
-        return False
-
-    return (
-        data in festivita_nazionali
-        or
-        data in dati["festivita"]
-    )
-
-
-def costruisci_mappa_rotazione_festivita(
-    inizio,
-    fine,
-    dati,
-    festivita_nazionali
-):
-    """
-    Quando "Salta festività" è attivo, crea una corrispondenza
-    tra la giornata logica della rotazione e la prima giornata
-    lavorativa realmente disponibile.
-
-    Esempio:
-
-        Giovedì logico -> Giovedì reale
-        Venerdì logico -> FESTA
-        Lunedì logico  -> Venerdì reale
-        Martedì logico -> Lunedì reale
-        Mercoledì logico -> Martedì reale
-
-    In questo modo la festività non crea buchi e non altera
-    la posizione relativa dei gruppi.
-    """
-
-    if not dati.get(
-        "salta_festivita",
-        True
-    ):
-
-        return {}
-
-    mappa = {}
-
-    data_logica = inizio
-    data_reale = inizio
-
-    while data_logica <= fine:
-
-        if data_logica.weekday() < 5:
-
-            while (
-                data_reale.weekday() >= 5
-                or
-                e_festivita_saltabile(
-                    data_reale,
-                    dati,
-                    festivita_nazionali
-                )
-            ):
-
-                data_reale += datetime.timedelta(
-                    days=1
-                )
-
-            mappa[
-                data_logica
-            ] = data_reale
-
-            data_reale += datetime.timedelta(
-                days=1
-            )
-
-        data_logica += datetime.timedelta(
-            days=1
-        )
-
-    return mappa
 
 
 # ============================================================
@@ -1370,15 +1214,8 @@ def crea_stato_giorno(
         info = "Chiuso"
 
     elif (
-        (
-            is_festa_nazionale
-            or is_festa_custom
-        )
-        and
-        dati.get(
-            "salta_festivita",
-            True
-        )
+        is_festa_nazionale
+        or is_festa_custom
     ):
 
         tipo = "Festa"
@@ -1408,9 +1245,7 @@ def crea_stato_giorno(
 
     return {
         "data": data,
-
         "tipo": tipo,
-
         "info": info,
 
         "tetto": tetto_per_data(
@@ -1461,14 +1296,8 @@ def prova_assegnazione(
         return False
 
     # --------------------------------------------------------
-    # DUPLICATO PER ID / NOME
+    # DUPLICATO
     # --------------------------------------------------------
-
-    if any(
-        int(elemento["id"]) == id_dipendente
-        for elemento in stato["dipendenti"]
-    ):
-        return False
 
     if nome in stato["nomi"]:
         return False
@@ -1481,11 +1310,13 @@ def prova_assegnazione(
         len(stato["nomi"])
         >= stato["tetto"]
     ):
-
         return False
 
     # --------------------------------------------------------
     # LIMITE RUOLO
+    #
+    # Se il limite è disattivato, il ruolo non è presente
+    # nel dizionario e quindi non viene applicato alcun limite.
     # --------------------------------------------------------
 
     limite_ruolo = dati[
@@ -1509,7 +1340,6 @@ def prova_assegnazione(
             presenti_ruolo
             >= limite_ruolo
         ):
-
             return False
 
     # --------------------------------------------------------
@@ -1566,6 +1396,12 @@ def applica_protezione_venerdi_lunedi(
           l'automatico del lunedì viene spostato al martedì e
           l'automatico del martedì prende il suo posto.
 
+    NOTA IMPORTANTE:
+    non è matematicamente possibile mantenere contemporaneamente,
+    per tutti i dipendenti, un avanzamento esatto di un giorno
+    ad ogni ciclo e vietare sempre Venerdì -> Lunedì. In quel caso
+    il motore usa quindi lo scambio minimo necessario, preservando
+    la copertura e la rotazione il più possibile.
     """
 
     venerdi_precedenti = {}
@@ -1710,6 +1546,34 @@ def applica_protezione_venerdi_lunedi(
                 ruolo,
                 0
             ) + 1
+        )
+
+    def ruolo_ok(
+        giorno,
+        candidato
+    ):
+
+        ruolo = (
+            candidato.get("ruolo")
+            or "Nessuno"
+        )
+
+        limite = dati[
+            "limiti_ruoli"
+        ].get(
+            ruolo
+        )
+
+        if limite is None:
+            return True
+
+        return (
+            stato[giorno][
+                "conteggio_ruoli"
+            ].get(
+                ruolo,
+                0
+            ) < limite
         )
 
     for lunedi in lunedi_correnti:
@@ -1887,7 +1751,6 @@ def applica_protezione_venerdi_lunedi(
                             0
                         ) > limite_partner
                     ):
-
                         continue
 
                     if (
@@ -1897,7 +1760,6 @@ def applica_protezione_venerdi_lunedi(
                             0
                         ) > limite_off
                     ):
-
                         continue
 
                     distanza = abs(
@@ -1978,59 +1840,6 @@ def applica_protezione_venerdi_lunedi(
                 "data_assegnata"
             ] = lunedi
 
-# ============================================================
-# CONTROLLO GIORNI CONSECUTIVI
-# ============================================================
-
-def ha_giorno_consecutivo(
-    stato,
-    id_dipendente,
-    data
-):
-    """
-    Restituisce True se il dipendente è già assegnato
-    al giorno precedente o successivo.
-
-    Impedisce quindi:
-        LUN -> MAR
-        MAR -> MER
-        MER -> GIO
-        GIO -> VEN
-
-    e viceversa.
-    """
-
-    id_dipendente = int(
-        id_dipendente
-    )
-
-    for delta in (-1, 1):
-
-        giorno_controllo = (
-            data
-            + datetime.timedelta(
-                days=delta
-            )
-        )
-
-        stato_giorno = stato.get(
-            giorno_controllo
-        )
-
-        if not stato_giorno:
-            continue
-
-        for dipendente in (
-            stato_giorno["dipendenti"]
-        ):
-
-            if int(
-                dipendente["id"]
-            ) == id_dipendente:
-
-                return True
-
-    return False
 
 # ============================================================
 # GENERAZIONE CICLO
@@ -2041,9 +1850,7 @@ def genera_ciclo(
     fine_ciclo,
     dati,
     festivita_nazionali,
-    stato_precedente=None,
-    coda_rotazione=None,
-    mappa_rotazione_festivita=None
+    stato_precedente=None
 ):
     """
     Genera un ciclo completo.
@@ -2057,12 +1864,6 @@ def genera_ciclo(
     """
 
     frequenza = dati["frequenza"]
-
-    if coda_rotazione is None:
-        coda_rotazione = []
-
-    if mappa_rotazione_festivita is None:
-        mappa_rotazione_festivita = {}
 
     # ========================================================
     # CREA TUTTI I GIORNI DEL CICLO
@@ -2182,29 +1983,13 @@ def genera_ciclo(
             frequenza
         )
 
-        data_target_logica = (
+        data_target = (
             inizio_ciclo
             + datetime.timedelta(
                 weeks=settimana_nel_ciclo,
                 days=indice_giorno
             )
         )
-
-        if dati.get(
-            "salta_festivita",
-            True
-        ):
-
-            data_target = (
-                mappa_rotazione_festivita.get(
-                    data_target_logica,
-                    data_target_logica
-                )
-            )
-
-        else:
-
-            data_target = data_target_logica
 
         automatici[-1][
             "data_target"
@@ -2225,65 +2010,6 @@ def genera_ciclo(
     non_assegnati = []
 
     # ========================================================
-    # CODA DAL CICLO PRECEDENTE
-    # ========================================================
-
-    for candidato in list(
-        coda_rotazione
-    ):
-
-        data_target = (
-            candidato["data_target"]
-        )
-
-        if data_target < inizio_ciclo:
-
-            coda_rotazione.remove(
-                candidato
-            )
-
-            non_assegnati.append(
-                candidato
-            )
-
-            continue
-
-        if data_target > fine_ciclo:
-            continue
-
-        coda_rotazione.remove(
-            candidato
-        )
-
-        if in_eccezione(
-            candidato["id"],
-            data_target,
-            dati["eccezioni"]
-        ):
-
-            non_assegnati.append(
-                candidato
-            )
-
-            continue
-
-        if prova_assegnazione(
-            stato[data_target],
-            candidato,
-            dati
-        ):
-
-            candidato[
-                "data_assegnata"
-            ] = data_target
-
-        else:
-
-            non_assegnati.append(
-                candidato
-            )
-
-    # ========================================================
     # TARGET
     # ========================================================
 
@@ -2292,25 +2018,6 @@ def genera_ciclo(
         data_target = (
             candidato["data_target"]
         )
-
-        if data_target > fine_ciclo:
-
-            if dati.get(
-                "salta_festivita",
-                True
-            ):
-
-                coda_rotazione.append(
-                    candidato
-                )
-
-            else:
-
-                non_assegnati.append(
-                    candidato
-                )
-
-            continue
 
         if data_target not in stato:
 
@@ -2324,18 +2031,6 @@ def genera_ciclo(
             candidato["id"],
             data_target,
             dati["eccezioni"]
-        ):
-
-            non_assegnati.append(
-                candidato
-            )
-
-            continue
-
-        if ha_giorno_consecutivo(
-            stato,
-            candidato["id"],
-            data_target
         ):
 
             non_assegnati.append(
@@ -2386,15 +2081,6 @@ def genera_ciclo(
                 giorno,
                 dati["eccezioni"]
             ):
-
-                continue
-
-            if ha_giorno_consecutivo(
-                stato,
-                candidato["id"],
-                giorno
-            ):
-
                 continue
 
             if (
@@ -2403,7 +2089,6 @@ def genera_ciclo(
                 )
                 >= stato[giorno]["tetto"]
             ):
-
                 continue
 
             disponibili.append(
@@ -2450,41 +2135,41 @@ def genera_ciclo(
     giorni_forzati = [
         giorno
         for giorno in giorni_lavorativi
-        if stato[giorno]["periodo_forzato"]
+        if stato[giorno][
+            "periodo_forzato"
+        ]
     ]
-
-    # --------------------------------------------------------
-    # Ordina i giorni forzati dal più vuoto al più pieno
-    # --------------------------------------------------------
 
     giorni_forzati.sort(
         key=lambda giorno: (
             -(
                 stato[giorno]["tetto"]
-                - len(stato[giorno]["nomi"])
+                - len(
+                    stato[giorno]["nomi"]
+                )
             ),
             giorno
         )
     )
 
-    # --------------------------------------------------------
-    # Riempimento del periodo forzato
-    #
-    # IMPORTANTE:
-    # - non sposta mai un dipendente se crea consecutivi
-    # - non supera il tetto del giorno
-    # - non supera il limite del ruolo
-    # - preferisce spostare chi è più lontano dal proprio target
-    # - dopo ogni spostamento aggiorna immediatamente
-    #   il giorno precedente
-    # --------------------------------------------------------
-
     for giorno_forzato in giorni_forzati:
 
-        while (
-            len(stato[giorno_forzato]["nomi"])
-            < stato[giorno_forzato]["tetto"]
-        ):
+        while True:
+
+            capacita = (
+                stato[
+                    giorno_forzato
+                ]["tetto"]
+            )
+
+            occupati = len(
+                stato[
+                    giorno_forzato
+                ]["nomi"]
+            )
+
+            if occupati >= capacita:
+                break
 
             candidati_spostamento = []
 
@@ -2494,30 +2179,19 @@ def genera_ciclo(
                     candidato["data_assegnata"]
                 )
 
-                # Nessuna assegnazione da spostare
                 if data_attuale is None:
                     continue
 
-                # È già nel giorno forzato
-                if data_attuale == giorno_forzato:
+                if (
+                    data_attuale
+                    == giorno_forzato
+                ):
                     continue
 
-                # Eccezione dipendente
                 if in_eccezione(
                     candidato["id"],
                     giorno_forzato,
                     dati["eccezioni"]
-                ):
-                    continue
-
-                # ------------------------------------------------
-                # CONTROLLO GIORNI CONSECUTIVI
-                # ------------------------------------------------
-
-                if ha_giorno_consecutivo(
-                    stato,
-                    candidato["id"],
-                    giorno_forzato
                 ):
                     continue
 
@@ -2526,12 +2200,10 @@ def genera_ciclo(
                     or "Nessuno"
                 )
 
-                # ------------------------------------------------
-                # LIMITE RUOLO
-                # ------------------------------------------------
-
                 limite_ruolo = (
-                    dati["limiti_ruoli"].get(
+                    dati[
+                        "limiti_ruoli"
+                    ].get(
                         ruolo
                     )
                 )
@@ -2539,9 +2211,9 @@ def genera_ciclo(
                 if limite_ruolo is not None:
 
                     presenti_ruolo = (
-                        stato[giorno_forzato][
-                            "conteggio_ruoli"
-                        ].get(
+                        stato[
+                            giorno_forzato
+                        ]["conteggio_ruoli"].get(
                             ruolo,
                             0
                         )
@@ -2553,79 +2225,45 @@ def genera_ciclo(
                     ):
                         continue
 
-                # ------------------------------------------------
-                # CALCOLO DISTANZE
-                # ------------------------------------------------
-
-                data_target = (
-                    candidato["data_target"]
-                )
-
-                distanza_target = abs(
+                distanza = abs(
                     (
                         giorno_forzato
-                        - data_target
+                        - candidato["data_target"]
                     ).days
                 )
 
-                distanza_attuale = abs(
+                distanza_dal_corrente = abs(
                     (
                         giorno_forzato
                         - data_attuale
                     ).days
                 )
 
-                # ------------------------------------------------
-                # PENALITÀ SE TOGLIAMO UNA GIORNATA
-                # CHE È GIÀ CORRETTA
-                #
-                # Se il dipendente è sul proprio target,
-                # cerchiamo di non spostarlo.
-                # ------------------------------------------------
-
-                penalita_target = (
-                    1
-                    if data_attuale == data_target
-                    else 0
-                )
-
                 candidati_spostamento.append(
                     (
-                        penalita_target,
-                        distanza_target,
-                        -distanza_attuale,
+                        distanza,
+                        distanza_dal_corrente,
                         candidato["posizione"],
                         candidato["id"],
                         candidato
                     )
                 )
 
-            # Nessun candidato disponibile
             if not candidati_spostamento:
                 break
-
-            # ----------------------------------------------------
-            # ORDINE CANDIDATI
-            # ----------------------------------------------------
 
             candidati_spostamento.sort(
                 key=lambda x: (
                     x[0],
                     x[1],
                     x[2],
-                    x[3],
-                    x[4]
+                    x[3]
                 )
             )
 
             spostato = False
 
-            # ----------------------------------------------------
-            # TENTATIVO DI SPOSTAMENTO
-            # ----------------------------------------------------
-
             for (
-                _,
                 _,
                 _,
                 _,
@@ -2637,7 +2275,9 @@ def genera_ciclo(
                     candidato["data_assegnata"]
                 )
 
-                nome = candidato["nome"]
+                nome = candidato[
+                    "nome"
+                ]
 
                 ruolo = (
                     candidato["ruolo"]
@@ -2651,55 +2291,28 @@ def genera_ciclo(
                     stato[vecchia_data]
                 )
 
-                # ------------------------------------------------
-                # Verifica che sia ancora presente
-                # ------------------------------------------------
-
-                elemento_vecchio = None
-
-                for elemento in (
-                    stato_vecchio["dipendenti"]
-                ):
-
-                    if (
-                        int(elemento["id"])
-                        == int(candidato["id"])
-                    ):
-                        elemento_vecchio = elemento
-                        break
-
-                if elemento_vecchio is None:
-                    continue
-
-                # ------------------------------------------------
-                # CONTROLLO CONSECUTIVITÀ
-                # nuovamente prima della modifica
-                # ------------------------------------------------
-
-                if ha_giorno_consecutivo(
-                    stato,
-                    candidato["id"],
-                    giorno_forzato
+                if nome not in (
+                    stato_vecchio["nomi"]
                 ):
                     continue
 
-                # ------------------------------------------------
-                # RIMOZIONE TEMPORANEA
-                # ------------------------------------------------
-
-                stato_vecchio["nomi"].remove(
+                stato_vecchio[
+                    "nomi"
+                ].remove(
                     nome
                 )
 
-                stato_vecchio["dipendenti"] = [
+                stato_vecchio[
+                    "dipendenti"
+                ] = [
                     elemento
                     for elemento in (
                         stato_vecchio[
                             "dipendenti"
                         ]
                     )
-                    if int(elemento["id"])
-                    != int(candidato["id"])
+                    if elemento["id"]
+                    != candidato["id"]
                 ]
 
                 ruolo_count = (
@@ -2728,12 +2341,10 @@ def genera_ciclo(
                         None
                     )
 
-                # ------------------------------------------------
-                # TENTATIVO SUL GIORNO FORZATO
-                # ------------------------------------------------
-
                 riuscito = prova_assegnazione(
-                    stato[giorno_forzato],
+                    stato[
+                        giorno_forzato
+                    ],
                     candidato,
                     dati
                 )
@@ -2748,25 +2359,11 @@ def genera_ciclo(
 
                     break
 
-                # ------------------------------------------------
-                # RIPRISTINO
-                # ------------------------------------------------
-
-                ripristinato = prova_assegnazione(
+                prova_assegnazione(
                     stato_vecchio,
                     candidato,
                     dati
                 )
-
-                if ripristinato:
-
-                    candidato[
-                        "data_assegnata"
-                    ] = vecchia_data
-
-            # ----------------------------------------------------
-            # Nessuno spostamento possibile
-            # ----------------------------------------------------
 
             if not spostato:
                 break
@@ -2880,54 +2477,8 @@ def ottieni_calendario_settimanale(
         frequenza
     )
 
-    # --------------------------------------------------------
-    # Inizio e fine reali della sequenza logica
-    # --------------------------------------------------------
-
-    inizio_primo_ciclo = (
-        EPOCA_ROTazione
-        + datetime.timedelta(
-            weeks=(
-                primo_ciclo
-                * frequenza
-            )
-        )
-    )
-
-    fine_ultimo_ciclo = (
-        EPOCA_ROTazione
-        + datetime.timedelta(
-            weeks=(
-                (ultimo_ciclo + 1)
-                * frequenza
-            )
-        )
-        - datetime.timedelta(
-            days=1
-        )
-    )
-
-    # --------------------------------------------------------
-    # MAPPA FESTIVITÀ
-    #
-    # Viene costruita solamente sul periodo generato,
-    # NON dal 2000 a oggi.
-    # --------------------------------------------------------
-
-    mappa_rotazione_festivita = (
-        costruisci_mappa_rotazione_festivita(
-            inizio_primo_ciclo,
-            fine_ultimo_ciclo,
-            dati,
-            festivita_nazionali
-        )
-    )
-
     cicli = {}
-
     stato_precedente = None
-
-    coda_rotazione = []
 
     for numero_ciclo in range(
         primo_ciclo,
@@ -2959,9 +2510,7 @@ def ottieni_calendario_settimanale(
             fine_ciclo,
             dati,
             festivita_nazionali,
-            stato_precedente,
-            coda_rotazione,
-            mappa_rotazione_festivita
+            stato_precedente
         )
 
         stato_precedente = cicli[
@@ -3041,15 +2590,8 @@ def ottieni_calendario_settimanale(
             })
 
         elif (
-            (
-                is_festa_nazionale
-                or is_festa_custom
-            )
-            and
-            dati.get(
-                "salta_festivita",
-                True
-            )
+            is_festa_nazionale
+            or is_festa_custom
         ):
 
             if is_festa_nazionale:
@@ -3206,7 +2748,6 @@ def home():
                     or dt_end is None
                     or dt_end < dt_start
                 ):
-
                     raise ValueError
 
             else:
@@ -3518,7 +3059,6 @@ def scarica_excel():
             settimana_attiva != "tutte"
             and settimana_attiva != nome_sett
         ):
-
             continue
 
         for giorno in giorni:
@@ -3815,8 +3355,14 @@ def dipendente_aggiungi():
     ).strip() or "Nessuno"
 
     if (
-        not nome_valido(nome)
-        or not nome_valido(cognome)
+        not nome
+        or not cognome
+        or any(
+            char.isdigit()
+            for char in (
+                nome + cognome
+            )
+        )
     ):
 
         return redirect(
@@ -4275,37 +3821,6 @@ def pagina_turni():
         )
 
     # --------------------------------------------------------
-    # SALTA FESTIVITÀ
-    # --------------------------------------------------------
-
-    cursor.execute("""
-        SELECT valore
-        FROM impostazioni
-        WHERE chiave = 'salta_festivita'
-    """)
-
-    row = cursor.fetchone()
-
-    if row is None:
-
-        salta_festivita = True
-
-    else:
-
-        valore = str(
-            row[0]
-        ).strip().lower()
-
-        salta_festivita = (
-            valore in (
-                "1",
-                "true",
-                "yes",
-                "on"
-            )
-        )
-
-    # --------------------------------------------------------
     # TETTO MANUALE
     # --------------------------------------------------------
 
@@ -4484,6 +3999,10 @@ def pagina_turni():
 
     conn.close()
 
+    # --------------------------------------------------------
+    # TEMPLATE
+    # --------------------------------------------------------
+
     return render_template(
         "turni.html",
 
@@ -4496,9 +4015,6 @@ def pagina_turni():
 
         protezione_venerdi_lunedi=
             protezione_venerdi_lunedi,
-
-        salta_festivita=
-            salta_festivita,
 
         n_automatici=
             n_automatici,
@@ -4524,7 +4040,6 @@ def pagina_turni():
         eccezioni_per_dipendente=
             eccezioni_per_dipendente
     )
-
 
 # ============================================================
 # TURNO INDIVIDUALE - AGGIUNGI
@@ -5145,6 +4660,7 @@ def salva_rotazione():
         conn = get_db()
         cursor = conn.cursor()
 
+        # Frequenza
         cursor.execute("""
             INSERT INTO impostazioni (
                 chiave,
@@ -5161,6 +4677,7 @@ def salva_rotazione():
             str(settimane),
         ))
 
+        # Protezione venerdì → lunedì
         cursor.execute("""
             INSERT INTO impostazioni (
                 chiave,
@@ -5180,7 +4697,6 @@ def salva_rotazione():
         ))
 
         conn.commit()
-
         conn.close()
         conn = None
 
@@ -5279,17 +4795,6 @@ def salva_impostazioni():
         )
 
         # ----------------------------------------------------
-        # SALTA FESTIVITÀ
-        # ----------------------------------------------------
-
-        salta_festivita = (
-            request.form.get(
-                "salta_festivita",
-                "0"
-            ) == "1"
-        )
-
-        # ----------------------------------------------------
         # DATABASE
         # ----------------------------------------------------
 
@@ -5359,33 +4864,10 @@ def salva_impostazioni():
         ))
 
         # ----------------------------------------------------
-        # SALTA FESTIVITÀ
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            INSERT INTO impostazioni (
-                chiave,
-                valore
-            )
-            VALUES (
-                'salta_festivita',
-                ?
-            )
-            ON CONFLICT(chiave)
-            DO UPDATE SET
-                valore = excluded.valore
-        """, (
-            "1"
-            if salta_festivita
-            else "0",
-        ))
-
-        # ----------------------------------------------------
         # COMMIT UNICO
         # ----------------------------------------------------
 
         conn.commit()
-
         conn.close()
         conn = None
 
@@ -5456,7 +4938,6 @@ def salva_tetto():
             """)
 
             conn.commit()
-
             conn.close()
             conn = None
 
@@ -5521,7 +5002,6 @@ def salva_tetto():
         ))
 
         conn.commit()
-
         conn.close()
         conn = None
 
@@ -5592,6 +5072,10 @@ def periodo_aggiungi():
 
         tetto_periodo = 0
 
+    # --------------------------------------------------------
+    # VALIDAZIONE
+    # --------------------------------------------------------
+
     if (
         data_inizio is None
         or data_fine is None
@@ -5615,7 +5099,6 @@ def periodo_aggiungi():
 
         cursor.execute("""
             INSERT INTO tetto_periodi (
-
                 data_inizio,
                 data_fine,
                 tetto_max
@@ -5628,7 +5111,6 @@ def periodo_aggiungi():
         ))
 
         conn.commit()
-
         conn.close()
         conn = None
 
@@ -5686,7 +5168,6 @@ def periodo_elimina(id_periodo):
         ))
 
         conn.commit()
-
         conn.close()
         conn = None
 
@@ -5748,6 +5229,9 @@ def ruolo_limite_aggiungi():
                 )
             )
 
+        # Checkbox:
+        # acceso  -> viene inviato "1"
+        # spento  -> non viene inviato
         attivo = (
             request.form.get("attivo")
             == "1"
@@ -5763,7 +5247,6 @@ def ruolo_limite_aggiungi():
             ).strip()
 
             try:
-
                 massimo = int(
                     valore_massimo
                 )
@@ -5791,6 +5274,8 @@ def ruolo_limite_aggiungi():
 
         else:
 
+            # Limite disattivato.
+            # Il valore numerico non viene utilizzato.
             massimo = 0
 
         conn = get_db()
@@ -6142,199 +5627,6 @@ def festa_elimina(
             )
         )
 
-# ============================================================
-# API JSON - PREPARAZIONE ANGULAR
-# ============================================================
-
-@app.route("/api/dipendenti", methods=["GET"])
-def api_dipendenti():
-    conn = None
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, nome, giorno_forzato, ruolo, rotazione_posizione
-            FROM dipendenti
-            ORDER BY rotazione_posizione ASC, id ASC
-        """)
-        return {
-            "ok": True,
-            "dipendenti": [dict(row) for row in cursor.fetchall()]
-        }
-    except Exception as e:
-        print("Errore api_dipendenti:", e)
-        return {"ok": False, "errore": "errore_database"}, 500
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-@app.route("/api/ruoli", methods=["GET"])
-def api_ruoli():
-    conn = None
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                r.id,
-                r.nome,
-                lr.id AS limite_id,
-                COALESCE(lr.max_per_giorno, 0) AS max_per_giorno,
-                COALESCE(lr.attivo, 0) AS attivo
-            FROM ruoli r
-            LEFT JOIN limiti_ruoli lr
-                ON LOWER(lr.ruolo) = LOWER(r.nome)
-            ORDER BY r.nome ASC
-        """)
-        return {
-            "ok": True,
-            "ruoli": [dict(row) for row in cursor.fetchall()]
-        }
-    except Exception as e:
-        print("Errore api_ruoli:", e)
-        return {"ok": False, "errore": "errore_database"}, 500
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-@app.route("/api/festivita", methods=["GET"])
-def api_festivita():
-    conn = None
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, data, descrizione
-            FROM festivita
-            ORDER BY data ASC, id ASC
-        """)
-        return {
-            "ok": True,
-            "festivita": [dict(row) for row in cursor.fetchall()]
-        }
-    except Exception as e:
-        print("Errore api_festivita:", e)
-        return {"ok": False, "errore": "errore_database"}, 500
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-@app.route("/api/impostazioni", methods=["GET"])
-def api_impostazioni():
-    conn = None
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT chiave, valore
-            FROM impostazioni
-            ORDER BY chiave ASC
-        """)
-        return {
-            "ok": True,
-            "impostazioni": {
-                row["chiave"]: row["valore"]
-                for row in cursor.fetchall()
-            }
-        }
-    except Exception as e:
-        print("Errore api_impostazioni:", e)
-        return {"ok": False, "errore": "errore_database"}, 500
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-@app.route("/api/periodi", methods=["GET"])
-def api_periodi():
-    conn = None
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, data_inizio, data_fine, tetto_max
-            FROM tetto_periodi
-            ORDER BY data_inizio ASC, id ASC
-        """)
-        return {
-            "ok": True,
-            "periodi": [dict(row) for row in cursor.fetchall()]
-        }
-    except Exception as e:
-        print("Errore api_periodi:", e)
-        return {"ok": False, "errore": "errore_database"}, 500
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-@app.route("/api/eccezioni", methods=["GET"])
-def api_eccezioni():
-    conn = None
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, id_dipendente, data_inizio, data_fine
-            FROM eccezioni_dipendenti
-            ORDER BY id_dipendente ASC, data_inizio ASC, id ASC
-        """)
-        return {
-            "ok": True,
-            "eccezioni": [dict(row) for row in cursor.fetchall()]
-        }
-    except Exception as e:
-        print("Errore api_eccezioni:", e)
-        return {"ok": False, "errore": "errore_database"}, 500
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-@app.route("/api/calendario", methods=["GET"])
-def api_calendario():
-    data_inizio = parse_date(
-        request.args.get("start")
-    )
-    data_fine = parse_date(
-        request.args.get("end")
-    )
-
-    if (
-        data_inizio is None
-        or data_fine is None
-        or data_fine < data_inizio
-    ):
-        return {
-            "ok": False,
-            "errore": "intervallo_date_non_valido"
-        }, 400
-
-    try:
-        calendario, statistiche, tetto_max = (
-            ottieni_calendario_settimanale(
-                data_inizio,
-                data_fine
-            )
-        )
-
-        return {
-            "ok": True,
-            "start": data_inizio.isoformat(),
-            "end": data_fine.isoformat(),
-            "tetto_max": tetto_max,
-            "calendario": calendario,
-            "statistiche": statistiche
-        }
-    except Exception as e:
-        print("Errore api_calendario:", e)
-        return {
-            "ok": False,
-            "errore": "errore_generazione_calendario"
-        }, 500
 
 # ============================================================
 # AVVIO
@@ -6345,5 +5637,5 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=5000,
-        debug=False
+        debug=True
     )
