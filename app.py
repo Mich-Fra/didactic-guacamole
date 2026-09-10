@@ -2135,75 +2135,110 @@ def genera_ciclo(
     giorni_forzati = [
         giorno
         for giorno in giorni_lavorativi
-        if stato[giorno][
-            "periodo_forzato"
-        ]
+        if stato[giorno]["periodo_forzato"]
     ]
 
-    giorni_forzati.sort(
-        key=lambda giorno: (
-            -(
-                stato[giorno]["tetto"]
-                - len(
-                    stato[giorno]["nomi"]
-                )
-            ),
-            giorno
+    # --------------------------------------------------------
+    # Funzione interna:
+    # calcola quanti posti mancano in ogni giorno del periodo
+    # --------------------------------------------------------
+    def posti_mancanti(giorno):
+        return max(
+            0,
+            stato[giorno]["tetto"]
+            - len(stato[giorno]["nomi"])
         )
-    )
 
-    for giorno_forzato in giorni_forzati:
 
-        while True:
+    # --------------------------------------------------------
+    # Il riequilibrio viene eseguito più volte.
+    #
+    # Questo è importante perché uno spostamento può liberare
+    # un dipendente da un giorno pieno e renderlo disponibile
+    # per un altro giorno del periodo.
+    # --------------------------------------------------------
+    while True:
 
-            capacita = (
-                stato[
-                    giorno_forzato
-                ]["tetto"]
+        # ----------------------------------------------------
+        # Giorni ancora sotto il tetto
+        # ----------------------------------------------------
+        giorni_da_riempire = [
+            giorno
+            for giorno in giorni_forzati
+            if posti_mancanti(giorno) > 0
+        ]
+
+        if not giorni_da_riempire:
+            break
+
+        # Prima i giorni con il deficit maggiore.
+        # A parità, data più vecchia.
+        giorni_da_riempire.sort(
+            key=lambda giorno: (
+                -posti_mancanti(giorno),
+                giorno
             )
+        )
 
-            occupati = len(
-                stato[
-                    giorno_forzato
-                ]["nomi"]
-            )
+        spostamento_eseguito = False
 
-            if occupati >= capacita:
-                break
+        # ----------------------------------------------------
+        # Prova a riempire il giorno più scoperto
+        # ----------------------------------------------------
+        for giorno_forzato in giorni_da_riempire:
 
-            candidati_spostamento = []
+            candidati = []
 
             for candidato in automatici:
 
-                data_attuale = (
-                    candidato["data_assegnata"]
+                id_candidato = int(
+                    candidato["id"]
                 )
 
+                data_attuale = (
+                    candidato.get(
+                        "data_assegnata"
+                    )
+                )
+
+                # Nessuna assegnazione attuale.
                 if data_attuale is None:
                     continue
 
-                if (
-                    data_attuale
-                    == giorno_forzato
-                ):
+                # È già nel giorno richiesto.
+                if data_attuale == giorno_forzato:
                     continue
 
+                # ------------------------------------------------
+                # ECCEZIONE DIPENDENTE
+                # ------------------------------------------------
                 if in_eccezione(
-                    candidato["id"],
+                    id_candidato,
                     giorno_forzato,
                     dati["eccezioni"]
                 ):
                     continue
 
+                # ------------------------------------------------
+                # CONTROLLO CONSECUTIVITÀ
+                # ------------------------------------------------
+                if ha_giorno_consecutivo(
+                    stato,
+                    id_candidato,
+                    giorno_forzato
+                ):
+                    continue
+
                 ruolo = (
-                    candidato["ruolo"]
+                    candidato.get("ruolo")
                     or "Nessuno"
                 )
 
+                # ------------------------------------------------
+                # LIMITE RUOLO
+                # ------------------------------------------------
                 limite_ruolo = (
-                    dati[
-                        "limiti_ruoli"
-                    ].get(
+                    dati["limiti_ruoli"].get(
                         ruolo
                     )
                 )
@@ -2211,9 +2246,9 @@ def genera_ciclo(
                 if limite_ruolo is not None:
 
                     presenti_ruolo = (
-                        stato[
-                            giorno_forzato
-                        ]["conteggio_ruoli"].get(
+                        stato[giorno_forzato][
+                            "conteggio_ruoli"
+                        ].get(
                             ruolo,
                             0
                         )
@@ -2225,63 +2260,126 @@ def genera_ciclo(
                     ):
                         continue
 
-                distanza = abs(
+                # ------------------------------------------------
+                # VERIFICA CHE IL DIPENDENTE SIA REALMENTE
+                # PRESENTE NELLA SUA GIORNATA ATTUALE
+                # ------------------------------------------------
+                if data_attuale not in stato:
+                    continue
+
+                presente = any(
+                    int(elemento["id"])
+                    == id_candidato
+                    for elemento in (
+                        stato[data_attuale]["dipendenti"]
+                    )
+                )
+
+                if not presente:
+                    continue
+
+                # ------------------------------------------------
+                # TARGET ORIGINALE
+                # ------------------------------------------------
+                data_target = (
+                    candidato.get(
+                        "data_target"
+                    )
+                )
+
+                if data_target is None:
+                    data_target = data_attuale
+
+                # ------------------------------------------------
+                # VALUTAZIONE CANDIDATO
+                #
+                # 1. Preferisce chi NON è sul proprio target.
+                # 2. Preferisce chi è più lontano dal target.
+                # 3. Preferisce chi libera un giorno pieno.
+                # 4. Mantiene la rotazione.
+                # ------------------------------------------------
+                sul_target = (
+                    data_attuale == data_target
+                )
+
+                distanza_target = abs(
                     (
-                        giorno_forzato
-                        - candidato["data_target"]
+                        data_attuale
+                        - data_target
                     ).days
                 )
 
-                distanza_dal_corrente = abs(
-                    (
-                        giorno_forzato
-                        - data_attuale
-                    ).days
+                posti_liberati = max(
+                    0,
+                    stato[data_attuale]["tetto"]
+                    - len(
+                        stato[data_attuale]["nomi"]
+                    )
                 )
 
-                candidati_spostamento.append(
+                candidati.append(
                     (
-                        distanza,
-                        distanza_dal_corrente,
-                        candidato["posizione"],
-                        candidato["id"],
+                        1 if sul_target else 0,
+                        -distanza_target,
+                        -posti_liberati,
+                        int(
+                            candidato.get(
+                                "posizione",
+                                0
+                            )
+                        ),
+                        id_candidato,
                         candidato
                     )
                 )
 
-            if not candidati_spostamento:
-                break
+            # ----------------------------------------------------
+            # Nessun candidato legalmente spostabile
+            # ----------------------------------------------------
+            if not candidati:
+                continue
 
-            candidati_spostamento.sort(
-                key=lambda x: (
-                    x[0],
-                    x[1],
-                    x[2],
-                    x[3]
+            candidati.sort(
+                key=lambda elemento: (
+                    elemento[0],
+                    elemento[1],
+                    elemento[2],
+                    elemento[3],
+                    elemento[4]
                 )
             )
 
-            spostato = False
-
+            # ----------------------------------------------------
+            # Prova i candidati nell'ordine migliore.
+            #
+            # Lo spostamento viene fatto solo se:
+            # - il nuovo giorno lo accetta;
+            # - tutti i limiti restano rispettati.
+            # ----------------------------------------------------
             for (
                 _,
                 _,
                 _,
                 _,
+                _,
                 candidato
-            ) in candidati_spostamento:
+            ) in candidati:
 
-                vecchia_data = (
-                    candidato["data_assegnata"]
+                id_candidato = int(
+                    candidato["id"]
                 )
 
-                nome = candidato[
-                    "nome"
-                ]
+                nome = candidato["nome"]
 
                 ruolo = (
-                    candidato["ruolo"]
+                    candidato.get("ruolo")
                     or "Nessuno"
+                )
+
+                vecchia_data = (
+                    candidato.get(
+                        "data_assegnata"
+                    )
                 )
 
                 if vecchia_data not in stato:
@@ -2291,28 +2389,87 @@ def genera_ciclo(
                     stato[vecchia_data]
                 )
 
-                if nome not in (
-                    stato_vecchio["nomi"]
+                # ------------------------------------------------
+                # Individua il dipendente nella giornata vecchia
+                # ------------------------------------------------
+                elemento_vecchio = None
+
+                for elemento in (
+                    stato_vecchio["dipendenti"]
+                ):
+
+                    if (
+                        int(elemento["id"])
+                        == id_candidato
+                    ):
+                        elemento_vecchio = elemento
+                        break
+
+                if elemento_vecchio is None:
+                    continue
+
+                # ------------------------------------------------
+                # Controllo consecutività immediatamente prima
+                # dello spostamento.
+                # ------------------------------------------------
+                if ha_giorno_consecutivo(
+                    stato,
+                    id_candidato,
+                    giorno_forzato
                 ):
                     continue
 
-                stato_vecchio[
-                    "nomi"
-                ].remove(
-                    nome
+                # ------------------------------------------------
+                # SALVATAGGIO DELLO STATO ORIGINALE
+                # ------------------------------------------------
+                nomi_vecchi = list(
+                    stato_vecchio["nomi"]
                 )
 
-                stato_vecchio[
-                    "dipendenti"
-                ] = [
+                dipendenti_vecchi = list(
+                    stato_vecchio["dipendenti"]
+                )
+
+                conteggio_ruoli_vecchio = dict(
+                    stato_vecchio[
+                        "conteggio_ruoli"
+                    ]
+                )
+
+                nomi_nuovi = list(
+                    stato[giorno_forzato]["nomi"]
+                )
+
+                dipendenti_nuovi = list(
+                    stato[giorno_forzato][
+                        "dipendenti"
+                    ]
+                )
+
+                conteggio_ruoli_nuovo = dict(
+                    stato[giorno_forzato][
+                        "conteggio_ruoli"
+                    ]
+                )
+
+                # ------------------------------------------------
+                # RIMOZIONE TEMPORANEA DAL GIORNO VECCHIO
+                # ------------------------------------------------
+                stato_vecchio["nomi"] = [
+                    n
+                    for n in stato_vecchio["nomi"]
+                    if n != nome
+                ]
+
+                stato_vecchio["dipendenti"] = [
                     elemento
                     for elemento in (
                         stato_vecchio[
                             "dipendenti"
                         ]
                     )
-                    if elemento["id"]
-                    != candidato["id"]
+                    if int(elemento["id"])
+                    != id_candidato
                 ]
 
                 ruolo_count = (
@@ -2341,10 +2498,11 @@ def genera_ciclo(
                         None
                     )
 
+                # ------------------------------------------------
+                # PROVA ASSEGNAZIONE AL GIORNO FORZATO
+                # ------------------------------------------------
                 riuscito = prova_assegnazione(
-                    stato[
-                        giorno_forzato
-                    ],
+                    stato[giorno_forzato],
                     candidato,
                     dati
                 )
@@ -2355,18 +2513,57 @@ def genera_ciclo(
                         "data_assegnata"
                     ] = giorno_forzato
 
-                    spostato = True
+                    spostamento_eseguito = True
 
                     break
 
-                prova_assegnazione(
-                    stato_vecchio,
-                    candidato,
-                    dati
+                # ------------------------------------------------
+                # RIPRISTINO COMPLETO DEL GIORNO VECCHIO
+                #
+                # Non utilizziamo prova_assegnazione() per il
+                # ripristino: riportiamo esattamente lo stato
+                # precedente, senza rischiare modifiche ulteriori.
+                # ------------------------------------------------
+                stato_vecchio["nomi"] = (
+                    nomi_vecchi
                 )
 
-            if not spostato:
+                stato_vecchio["dipendenti"] = (
+                    dipendenti_vecchi
+                )
+
+                stato_vecchio[
+                    "conteggio_ruoli"
+                ] = (
+                    conteggio_ruoli_vecchio
+                )
+
+                stato[giorno_forzato][
+                    "nomi"
+                ] = nomi_nuovi
+
+                stato[giorno_forzato][
+                    "dipendenti"
+                ] = dipendenti_nuovi
+
+                stato[giorno_forzato][
+                    "conteggio_ruoli"
+                ] = conteggio_ruoli_nuovo
+
+            # ----------------------------------------------------
+            # Appena viene effettuato uno spostamento,
+            # ricomincia dal giorno con il deficit aggiornato.
+            # ----------------------------------------------------
+            if spostamento_eseguito:
                 break
+
+        # --------------------------------------------------------
+        # Se un intero giro non produce nessuno spostamento,
+        # non esiste più una soluzione legale con i vincoli
+        # attualmente presenti.
+        # --------------------------------------------------------
+        if not spostamento_eseguito:
+            break
 
     # ========================================================
     # PROTEZIONE VENERDÌ → LUNEDÌ
